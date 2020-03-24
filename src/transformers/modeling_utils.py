@@ -671,6 +671,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         num_return_sequences=None,
         attention_mask=None,
         decoder_start_token_id=None,
+        mems=None
     ):
         r""" Generates sequences for models with a LM head. The method currently supports greedy decoding, beam-search decoding, sampling with temperature, sampling with top-k or nucleus sampling.
 
@@ -932,6 +933,12 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         else:
             encoder_outputs = None
             cur_len = input_ids.shape[-1]
+        # Pad input_ids to the full length and establish a prediction_index.
+        (batches, prediction_index) = input_ids.shape
+        input_ids = torch.cat([input_ids, torch.full((batches, max_length - prediction_index), pad_token_id,
+                                                     dtype=torch.long,
+                                                     device=input_ids.device)], dim=-1)
+        cur_len = input_ids.shape[1]
 
         if num_beams > 1:
             output = self._generate_beam_search(
@@ -1000,6 +1007,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         batch_size,
         encoder_outputs,
         attention_mask,
+        mems,
+        prediction_index
     ):
         """ Generate sequences for each example without beam search (num_beams == 1).
             All returned sequence are generated independantly.
@@ -1009,9 +1018,19 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         sent_lengths = input_ids.new(batch_size).fill_(max_length)
 
         past = encoder_outputs  # defined for encoder-decoder models, None for decoder-only models
+        starting_index = prediction_index
+        past = None
 
-        while cur_len < max_length:
-            model_inputs = self.prepare_inputs_for_generation(input_ids, past=past, attention_mask=attention_mask)
+        while prediction_index < max_length:
+            model_inputs = self.prepare_inputs_for_generation(input_ids, prediction_index, past=past)
+
+            if mems is not None:
+                shaped_mems = []
+                bs = model_inputs["input_ids"].shape[0]
+                for m in mems:
+                    # batch dimension in mems is [1].
+                    shaped_mems.append(m.expand((m.shape[0], bs,) + m.shape[2:]))
+                model_inputs["mems"] = shaped_mems
 
             outputs = self(**model_inputs)
             next_token_logits = outputs[0][:, -1, :]
@@ -1055,7 +1074,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
             else:
                 tokens_to_add = next_token
 
-            input_ids = torch.cat([input_ids, tokens_to_add.unsqueeze(-1)], dim=-1)
+            input_ids[:, prediction_index] = tokens_to_add
 
             if eos_token_id is not None:
                 eos_in_sents = tokens_to_add == eos_token_id
@@ -1114,9 +1133,12 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         vocab_size,
         encoder_outputs,
         attention_mask,
+        mems,
+        prediction_index,
     ):
         """ Generate sequences for each example with beam search.
         """
+        starting_index = prediction_index
 
         # generated hypotheses
         generated_hyps = [
@@ -1138,8 +1160,17 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         # done sentences
         done = [False for _ in range(batch_size)]
 
-        while cur_len < max_length:
-            model_inputs = self.prepare_inputs_for_generation(input_ids, past=past, attention_mask=attention_mask)
+        while prediction_index < max_length:
+            model_inputs = self.prepare_inputs_for_generation(input_ids, prediction_index, past=past)
+
+            if mems is not None:
+                shaped_mems = []
+                bs = model_inputs["input_ids"].shape[0]
+                for m in mems:
+                    # batch dimension in mems is [1].
+                    shaped_mems.append(m.expand((m.shape[0], bs,) + m.shape[2:]))
+                model_inputs["mems"] = shaped_mems
+
             outputs = self(**model_inputs)  # (batch_size * num_beams, cur_len, vocab_size)
             next_token_logits = outputs[0][:, -1, :]  # (batch_size * num_beams, vocab_size)
 
@@ -1280,7 +1311,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
 
             # re-order batch
             input_ids = input_ids[beam_idx, :]
-            input_ids = torch.cat([input_ids, beam_tokens.unsqueeze(1)], dim=-1)
+            input_ids[:, prediction_index] = beam_words
 
             # re-order internal states
             if past is not None:
