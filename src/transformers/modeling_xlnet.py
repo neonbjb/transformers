@@ -935,7 +935,7 @@ class XLNetLMHeadModel(XLNetPreTrainedModel):
     def get_output_embeddings(self):
         return self.lm_loss
 
-    def prepare_inputs_for_generation(self, input_ids, prediction_index, **model_kwargs):
+    def prepare_inputs_for_generation(self, input_ids, prediction_index, past, **model_kwargs):
         # Add dummy token at the end (no attention on this one)
 
         effective_batch_size = input_ids.shape[0]

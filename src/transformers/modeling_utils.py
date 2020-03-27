@@ -964,6 +964,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
                 vocab_size=vocab_size,
                 encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
+                mems=mems,
+                prediction_index=prediction_index
             )
         else:
             output = self._generate_no_beam_search(
@@ -984,6 +986,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
                 batch_size=effective_batch_size,
                 encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
+                mems=mems,
+                prediction_index=prediction_index
             )
 
         return output
@@ -1311,7 +1315,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
 
             # re-order batch
             input_ids = input_ids[beam_idx, :]
-            input_ids[:, prediction_index] = beam_words
+            input_ids[:, prediction_index] = beam_tokens
 
             # re-order internal states
             if past is not None:
